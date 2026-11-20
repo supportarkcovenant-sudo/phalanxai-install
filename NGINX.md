@@ -8,6 +8,7 @@ so you can write or adjust your own configuration.
 - [How PhalanxAI runs](#how-phalanxai-runs)
 - [What the proxy must do](#what-the-proxy-must-do)
 - [Telling PhalanxAI to trust the proxy](#telling-phalanxai-to-trust-the-proxy)
+- [Under a path of another site](#under-a-path-of-another-site)
 - [nginx as a service on the machine](#nginx-as-a-service-on-the-machine)
 - [nginx as a container](#nginx-as-a-container)
 - [What travels over the connection](#what-travels-over-the-connection)
@@ -53,7 +54,8 @@ On an existing install, set `PHALANX_BIND="127.0.0.1"` and
 
 ## What the proxy must do
 
-Four things. The first is the one that is easy to miss.
+Three things, plus a fourth if PhalanxAI shares a hostname. The first is
+the one that is easy to miss.
 
 1. **Pass the browser's `Host` header through unchanged.** Terminals are
    WebSockets, and PhalanxAI refuses a WebSocket unless the page's address
@@ -62,12 +64,12 @@ Four things. The first is the one that is easy to miss.
    loads but every terminal is refused.
 2. **Allow WebSocket upgrades**, and do not time them out. nginx closes an
    idle proxied connection after 60 seconds by default.
-3. **Serve PhalanxAI at the root of a hostname**, such as
-   `phalanx.example.com`. It cannot live under a path like
-   `example.com/phalanx/`: the page requests `/api/v1/...` and `/assets/...`
-   from the root.
-4. **Allow request bodies of at least 20 MB.** Images attached to a chat can
+3. **Allow request bodies of at least 20 MB.** Images attached to a chat can
    be 10 MB each; nginx's default limit is 1 MB.
+4. **Under a path, leave the path on.** PhalanxAI can live at the root of
+   its own hostname (`phalanx.example.com`) with no further setup, or under
+   a path of another site (`example.com/phalanx/`) once it is told the
+   path. See [Under a path of another site](#under-a-path-of-another-site).
 
 ## Telling PhalanxAI to trust the proxy
 
@@ -112,6 +114,69 @@ which one.
 
 Only trust networks where everything that can reach port 8765 is yours.
 With `PHALANX_BIND="127.0.0.1"` that is this machine and its containers.
+
+## Under a path of another site
+
+Needs PhalanxAI 0.4.2 or later. Two halves: tell PhalanxAI the path, and
+have nginx pass requests through with the path still on them.
+
+**Tell PhalanxAI.** At install:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/supportarkcovenant-sudo/phalanxai-install/main/install.sh   | bash -s -- --bind 127.0.0.1 --tls off --base-path /phalanx
+```
+
+On an existing install, add this line to `/opt/phalanxai/phalanx.env` and
+run `phalanx up`:
+
+```bash
+PHALANX_BASE_PATH="/phalanx"
+```
+
+**Tell nginx.** Inside your site's existing `server` block:
+
+```nginx
+location = /phalanx {
+    return 301 /phalanx/;
+}
+
+location /phalanx/ {
+    # No path after the address. With a trailing slash here nginx would
+    # remove /phalanx, and PhalanxAI needs to see it.
+    proxy_pass http://127.0.0.1:8765;
+    proxy_http_version 1.1;
+
+    proxy_set_header Host $http_host;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_read_timeout 1d;
+    proxy_send_timeout 1d;
+
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-For $remote_addr;
+
+    client_max_body_size 20m;
+}
+```
+
+For nginx as a container, change the `proxy_pass` address as described
+[below](#nginx-as-a-container); the rest is the same.
+
+How it behaves, so you know what to expect:
+
+- PhalanxAI answers both under `/phalanx/` and at the root of its own port.
+  Each is complete on its own: a request that arrives with the prefix gets
+  a page, API and terminals under the prefix; one that arrives without it
+  (the `phalanx` command, Claude Code inside the container, a browser going
+  straight to port 8765) works as if no path were set.
+- Under the prefix, the sign-in cookies are scoped to `/phalanx`, so the
+  rest of the site is never sent them. A sign-in at `/phalanx/` and one made
+  straight at port 8765 are separate.
+- Everything in [What travels over the connection](#what-travels-over-the-connection)
+  moves under the prefix: `/phalanx/api/v1/...`, `/phalanx/assets/...`.
+- Embed snippets shown in the app include the prefix.
+- The path may be several segments deep (`/tools/phalanx`). It may hold
+  letters, digits, and `. _ ~ -`.
 
 ## nginx as a service on the machine
 
@@ -247,7 +312,9 @@ sessions do (git, package installs).
   [Telling PhalanxAI to trust the proxy](#telling-phalanxai-to-trust-the-proxy).
   Sign-in works either way; redirect port 80 to 443, as above, so the
   cookie is never sent in the clear.
-- **No path prefix.** A hostname of its own is required.
+- **Under a path, nginx must not remove the path.** A `proxy_pass` that
+  ends in `/` strips it, and the page then asks for its files at the site's
+  root. See [Under a path of another site](#under-a-path-of-another-site).
 
 ## Troubleshooting
 
@@ -257,7 +324,8 @@ sessions do (git, package installs).
 | Terminals work, then drop after about a minute idle | missing `proxy_read_timeout` |
 | Terminals never connect; the browser console shows a failed WebSocket with status 200 or 400 | missing `Upgrade` and `Connection` headers, or `proxy_http_version 1.1` |
 | Attaching an image fails with 413 | raise `client_max_body_size` |
-| Blank page with 404s for `/assets/...` | served under a path prefix; move it to its own hostname |
+| Blank page with 404s for `/assets/...` | served under a path, but either `PHALANX_BASE_PATH` is not set or `proxy_pass` ends in `/` and strips the path |
+| Under a path, signed in but every change fails with a CSRF error | the same cause: the page and its cookies disagree about the path |
 | Sign-in cookie has no `Secure` flag; logs show a `172.x` address for every sign-in | the proxy is not trusted; see above |
 | 502 Bad Gateway right after editing `phalanx.env` | a bad `PHALANX_TRUSTED_PROXIES` entry stopped the app; `phalanx logs` names it |
 | 502 Bad Gateway | nginx cannot reach the upstream: wrong address for your arrangement (see above), PhalanxAI stopped (`phalanx status`), or, for a container, nginx is not on `phalanxai04_default` |
@@ -274,5 +342,8 @@ Tested with PhalanxAI behind an nginx container on a shared Docker network:
 the page, sign-in, and a terminal WebSocket work with the `location` block
 above; the terminal is refused when `Host` is not passed through; and with
 `PHALANX_TRUSTED_PROXIES="172.16.0.0/12"` the cookies come back `Secure` and
-the log shows the visitor's address. The other arrangements follow from the
-same rules but were not each run.
+the log shows the visitor's address. Under `/phalanx/` of a site serving
+something else at its root: the page, its files, sign-in (cookies scoped to
+`/phalanx`), a terminal WebSocket, and the `phalanx` command inside the
+container all work. The other arrangements follow from the same rules but
+were not each run.

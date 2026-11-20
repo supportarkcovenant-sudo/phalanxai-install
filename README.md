@@ -10,7 +10,8 @@ Docker container on a Linux or macOS machine.
 - [Everyday commands](#everyday-commands)
 - [Upgrade and uninstall](#upgrade-and-uninstall)
 - [Running behind nginx](NGINX.md): how PhalanxAI listens, the proxy
-  settings it needs, and what to exempt
+  settings it needs, serving it under a path such as `/phalanx/`, and what
+  to exempt
 
 ## Install
 
@@ -149,9 +150,16 @@ phalanx --help                 # everything else
 
 ## Upgrade and uninstall
 
+When a newer release is published, the Status tab in the browser and
+`phalanx status` say so (PhalanxAI asks the image registry once a day;
+`"update_check": false` in its `config.json` turns that off). Nothing
+updates on its own. To update:
+
 ```bash
 phalanx upgrade   # pull the newest image and restart on it
 ```
+
+This restarts PhalanxAI and ends any running Claude Code sessions.
 
 Running the install command again also upgrades, and refreshes the
 `phalanx` command itself; it keeps your earlier answers as the defaults.
