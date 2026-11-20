@@ -9,6 +9,8 @@ Docker container on a Linux or macOS machine.
 - [Run the terminal app](#run-the-terminal-app)
 - [Everyday commands](#everyday-commands)
 - [Upgrade and uninstall](#upgrade-and-uninstall)
+- [Running behind nginx](NGINX.md): how PhalanxAI listens, the proxy
+  settings it needs, and what to exempt
 
 ## Install
 
