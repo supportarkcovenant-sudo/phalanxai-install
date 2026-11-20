@@ -7,7 +7,7 @@
 set -euo pipefail
 
 # === Constants ===
-LOCAL_IMAGE="phalanxai:0.4.0"
+LOCAL_IMAGE="phalanxai:0.4.1"
 REGISTRY_IMAGE="ghcr.io/supportarkcovenant-sudo/phalanxai:latest"
 # Where the image keeps the host command and its completion (see Dockerfile).
 IMAGE_HOST_FILES_DIR="/opt/phalanx/deploy"
@@ -29,6 +29,8 @@ PORT="8765"
 BIND="0.0.0.0"
 HOST_ACCESS=""
 TLS=""
+# Comma-separated addresses or networks of reverse proxies whose forwarded headers are believed.
+TRUSTED_PROXIES=""
 ASSUME_YES=0
 START=1
 FOLDERS=()
@@ -49,7 +51,11 @@ Guided install of PhalanxAI on a Linux or macOS host.
   install.sh                  ask questions (folder paths complete with Tab)
   install.sh --yes --folder /srv/projects [--folder ...] [--port 8765]
              [--bind 0.0.0.0] [--host-access full|restricted] [--tls off|self-signed]
+             [--trusted-proxy ADDRESS_OR_NETWORK ...]
              [--install-dir DIR] [--bin-dir DIR] [--image NAME] [--install-docker] [--no-start]
+
+--trusted-proxy names a reverse proxy (nginx) in front of PhalanxAI, for example 172.16.0.0/12
+for one reaching it through Docker. A proxy on this machine's 127.0.0.1 is always trusted.
 
 Piped from the web, options go after "bash -s --":
   curl -fsSL <url> | bash -s -- --yes --folder /srv/projects
@@ -65,6 +71,7 @@ parse_args() {
       --bind) BIND="${2:?--bind needs an address}"; shift ;;
       --host-access) HOST_ACCESS="${2:?--host-access needs full or restricted}"; shift ;;
       --tls) TLS="${2:?--tls needs off or self-signed}"; shift ;;
+      --trusted-proxy) TRUSTED_PROXIES="${TRUSTED_PROXIES:+$TRUSTED_PROXIES,}${2:?--trusted-proxy needs an address or network}"; shift ;;
       --install-dir) INSTALL_DIR="${2:?}"; shift ;;
       --bin-dir) BIN_DIR="${2:?}"; shift ;;
       --image) IMAGE="${2:?}"; shift ;;
@@ -85,6 +92,7 @@ load_previous() {
   PORT="${PHALANX_PORT:-$PORT}"; BIND="${PHALANX_BIND:-$BIND}"
   [ -n "$HOST_ACCESS" ] || HOST_ACCESS="${PHALANX_HOST_ACCESS:-}"
   [ -n "$TLS" ] || TLS="${PHALANX_TLS:-}"
+  [ -n "$TRUSTED_PROXIES" ] || TRUSTED_PROXIES="${PHALANX_TRUSTED_PROXIES:-}"
   if [ "${#FOLDERS[@]}" -eq 0 ] && [ -f "$INSTALL_DIR/mounts.list" ]; then
     while IFS= read -r folder; do [ -n "$folder" ] && FOLDERS+=("$folder"); done < "$INSTALL_DIR/mounts.list"
     PREVIOUS_FOLDERS=1
@@ -261,6 +269,7 @@ PHALANX_PORT="$PORT"
 PHALANX_BIND="$BIND"
 PHALANX_HOST_ACCESS="$HOST_ACCESS"
 PHALANX_TLS="$TLS"
+PHALANX_TRUSTED_PROXIES="$TRUSTED_PROXIES"
 PHALANX_UID="$(id -u)"
 PHALANX_GID="$(id -g)"
 EOF
