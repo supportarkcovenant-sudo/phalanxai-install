@@ -7,6 +7,7 @@ so you can write or adjust your own configuration.
 
 - [How PhalanxAI runs](#how-phalanxai-runs)
 - [What the proxy must do](#what-the-proxy-must-do)
+- [Telling PhalanxAI to trust the proxy](#telling-phalanxai-to-trust-the-proxy)
 - [nginx as a service on the machine](#nginx-as-a-service-on-the-machine)
 - [nginx as a container](#nginx-as-a-container)
 - [What travels over the connection](#what-travels-over-the-connection)
@@ -67,6 +68,50 @@ Four things. The first is the one that is easy to miss.
    from the root.
 4. **Allow request bodies of at least 20 MB.** Images attached to a chat can
    be 10 MB each; nginx's default limit is 1 MB.
+
+## Telling PhalanxAI to trust the proxy
+
+nginx tells PhalanxAI that the visitor used HTTPS (`X-Forwarded-Proto`) and
+what their address is (`X-Forwarded-For`). PhalanxAI believes those headers
+only from proxies it trusts, because otherwise anyone who can reach the port
+could claim any address. When it believes them:
+
+- the sign-in cookies are marked `Secure`,
+- embed snippets are written with `https://`,
+- sign-in logs show the visitor's address instead of the proxy's.
+
+`127.0.0.1` is always trusted. Anything else has to be named, as an address
+or a network. Needs PhalanxAI 0.4.1 or later (`phalanx status` shows the
+version; `phalanx upgrade` moves to the newest).
+
+| Arrangement | PhalanxAI sees nginx as | What to do |
+|---|---|---|
+| nginx service, full install | `127.0.0.1` | nothing |
+| nginx service, restricted install | the Docker network's gateway | trust the Docker networks |
+| nginx container, either install | the nginx container's address | trust the Docker networks |
+
+Docker hands out addresses from `172.16.0.0/12` by default, so that network
+covers the last two rows. At install:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/supportarkcovenant-sudo/phalanxai-install/main/install.sh   | bash -s -- --bind 127.0.0.1 --tls off --trusted-proxy 172.16.0.0/12
+```
+
+On an existing install, add this line to `/opt/phalanxai/phalanx.env` and
+run `phalanx up`:
+
+```bash
+PHALANX_TRUSTED_PROXIES="172.16.0.0/12"
+```
+
+Several entries are separated by commas. To be exact rather than broad, use
+the one network or address instead: `docker network inspect
+phalanxai04_default` shows the subnet and gateway. An entry that is not an
+address or a network stops PhalanxAI from starting, and `phalanx logs` says
+which one.
+
+Only trust networks where everything that can reach port 8765 is yours.
+With `PHALANX_BIND="127.0.0.1"` that is this machine and its containers.
 
 ## nginx as a service on the machine
 
@@ -197,14 +242,11 @@ sessions do (git, package installs).
 
 ## Known limits
 
-- **The sign-in cookie is not marked `Secure` in most proxied setups.**
-  PhalanxAI believes `X-Forwarded-Proto` only from `127.0.0.1`. That is the
-  case for nginx as a service with a full install; in the other
-  arrangements it sees plain HTTP and omits the flag. Sign-in works either
-  way. Redirect port 80 to 443, as above, so the cookie is never sent in
-  the clear.
-- **Sign-in logs show the proxy's address**, not the visitor's, in those
-  same arrangements. Use nginx's access log for the real address.
+- **Until the proxy is trusted, the sign-in cookie is not marked `Secure`**
+  and sign-in logs show the proxy's address rather than the visitor's. See
+  [Telling PhalanxAI to trust the proxy](#telling-phalanxai-to-trust-the-proxy).
+  Sign-in works either way; redirect port 80 to 443, as above, so the
+  cookie is never sent in the clear.
 - **No path prefix.** A hostname of its own is required.
 
 ## Troubleshooting
@@ -216,6 +258,8 @@ sessions do (git, package installs).
 | Terminals never connect; the browser console shows a failed WebSocket with status 200 or 400 | missing `Upgrade` and `Connection` headers, or `proxy_http_version 1.1` |
 | Attaching an image fails with 413 | raise `client_max_body_size` |
 | Blank page with 404s for `/assets/...` | served under a path prefix; move it to its own hostname |
+| Sign-in cookie has no `Secure` flag; logs show a `172.x` address for every sign-in | the proxy is not trusted; see above |
+| 502 Bad Gateway right after editing `phalanx.env` | a bad `PHALANX_TRUSTED_PROXIES` entry stopped the app; `phalanx logs` names it |
 | 502 Bad Gateway | nginx cannot reach the upstream: wrong address for your arrangement (see above), PhalanxAI stopped (`phalanx status`), or, for a container, nginx is not on `phalanxai04_default` |
 
 To check PhalanxAI itself, bypassing nginx, on the machine:
@@ -226,8 +270,9 @@ curl http://127.0.0.1:8765/api/v1/system/version
 
 ---
 
-Tested with the PhalanxAI 0.4.0 image behind an nginx container on a shared
-Docker network: the page, sign-in, and a terminal WebSocket work with the
-`location` block above, and the terminal is refused when `Host` is not
-passed through. The other arrangements follow from the same rules but were
-not each run.
+Tested with PhalanxAI behind an nginx container on a shared Docker network:
+the page, sign-in, and a terminal WebSocket work with the `location` block
+above; the terminal is refused when `Host` is not passed through; and with
+`PHALANX_TRUSTED_PROXIES="172.16.0.0/12"` the cookies come back `Secure` and
+the log shows the visitor's address. The other arrangements follow from the
+same rules but were not each run.
